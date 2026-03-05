@@ -11,6 +11,7 @@ class FeatureVectorModel:
         self.same_named_entity = 0
         self.wordnet_similarity = 0
         self.embedding_similarity = 0 
+        self.head = {}
 
     def set_distance(self, distance):
         self.distance = distance
@@ -44,7 +45,10 @@ class FeatureVectorModel:
 
     def set_embedding_similarity(self, embedding_similarity):
         self.embedding_similarity = embedding_similarity
-    
+
+    def set_head(self, head):
+        self.head = head
+
     def get_distance(self):
         return self.distance
     
@@ -77,3 +81,6 @@ class FeatureVectorModel:
 
     def get_embedding_similarity(self):
         return self.embedding_similarity
+
+    def get_head(self):
+        return self.head
