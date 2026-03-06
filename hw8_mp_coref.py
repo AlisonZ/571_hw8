@@ -4,6 +4,8 @@ import json
 import nltk
 import numpy as np
 from numpy.linalg import norm
+import sklearn.svm
+from sklearn.preprocessing import normalize                                                                                     
 
 from utils import load_mention_pairs
 from FeatureVectorModel import FeatureVectorModel
@@ -14,6 +16,7 @@ from nltk.corpus import wordnet as wn, wordnet_ic
 DEMONSTRATIVE_WORDS = ['this', 'that', 'these', 'those']
 PLURAL_POS = ['NNPS', 'NNS']
 PLURAL_PRONOUNS = ['we', 'our', 'they', 'us']
+DETS_AND_DOMS = ['a', 'an', 'the', 'this','these', 'those', 'that']
 
 def get_inputs():
     train_pairs = sys.argv[1]
@@ -63,11 +66,11 @@ def is_pronoun(mention):
         return 0    
 
 def get_clean_string(mention):
-    tokens = mention['tokens']
+    tokens = mention['tokens'][:]
     clean_str_array = []
-    # TODO: check for DT? or if the word is in the list of determiners/demonstratives? 
     leading_word_pos = tokens[0]['pos']
-    if leading_word_pos == 'DT':
+    leading_word = tokens[0]['word']
+    if leading_word in DETS_AND_DOMS:
         tokens.pop(0)
     for token in tokens:
         clean_str_array.append(token['word'])
@@ -78,10 +81,8 @@ def get_clean_string(mention):
 def set_definite_anaphor(anaphor, fv):
     tokens = anaphor['tokens']
     for token in tokens:
-        pos = token['pos']
         word = token['word']
-        # TODO: only check for DT and only for "the"??
-        if pos == 'DT' and word == 'the':
+        if word == 'the':
             fv.set_is_definite_anaphor(1)
             return
     fv.set_is_definite_anaphor(0)
@@ -128,10 +129,12 @@ def get_wordnet_similarity(antecedent_head, anaphor_head):
     if not synset_1 or not synset_2:
         return -1
 
-    max_sim = -1
+    max_sim = 0
     for synset1 in synset_1:
         for synset2 in synset_2:
             if synset1._pos != synset2._pos:
+                continue
+            if synset1._pos not in ('n', 'v'):
                 continue
             sim_score = synset1.res_similarity(synset2, brown_ic)
             if sim_score > max_sim:
@@ -143,20 +146,18 @@ def get_named_entity(head):
     named_entity = head['named_entity']
     if pos == 'PRP':
         return 'person'
+    if named_entity == '_':
+        return None
     else:
         return named_entity
 
 def get_embedding_similarity(glove_vectors, antecedent, anaphor):
-
     ant_tokens = antecedent['tokens']
     anaphor_tokens = anaphor['tokens']
 
     ant_vector = []
     anaphor_vector = []
 
-  
-
-    ant_average = 0
     for token in ant_tokens:
         word = token['word']
         if word in glove_vectors:
@@ -183,6 +184,8 @@ def print_feature_vectors(fv, vectors_output, label):
         print(f'{fv.get_distance()}\t{fv.get_is_antecendent_pronoun()}\t{fv.get_is_anaphor_pronoun()}\t{fv.get_string_match()}\t{fv.get_head_string_match()}\t{fv.get_is_definite_anaphor()}\t{fv.get_is_demonstrative_anaphor()}\t{fv.get_number_agreement()}\t{fv.get_same_named_entity()}\t{fv.get_wordnet_similarity()}\t{fv.get_embedding_similarity()}\t{label}', file=output_file)
 
 def parse_mps(mps, glove_vectors, vectors_output):
+    vector_collection = []
+    labels = []
 
     for mp in mps:
         fv = FeatureVectorModel()
@@ -236,26 +239,55 @@ def parse_mps(mps, glove_vectors, vectors_output):
         # Same named entity
         antecendent_entity = get_named_entity(antecedent_head)
         anaphor_entity = get_named_entity(anaphor_head)
-        if antecendent_entity == anaphor_entity:
-            fv.set_same_named_entity(1)
-        else:
+        if antecendent_entity is None or anaphor_entity is None:
             fv.set_same_named_entity(0)
+        else:
+            if antecendent_entity == anaphor_entity:
+                fv.set_same_named_entity(1)
+            else:
+                fv.set_same_named_entity(0)
 
         # Wordnet similarity
         wordnet_similarity = get_wordnet_similarity(antecedent_head, anaphor_head)
+        fv.set_wordnet_similarity(wordnet_similarity)
 
         # Embedding similarity 
         cos = get_embedding_similarity(glove_vectors, antecedent, anaphor)
         fv.set_embedding_similarity(cos)
         label = mp['label']
+        vector_collection.append([fv.get_distance(),fv.get_is_antecendent_pronoun(),fv.get_is_anaphor_pronoun(),fv.get_string_match(),fv.get_head_string_match(),fv.get_is_definite_anaphor(),fv.get_is_demonstrative_anaphor(),fv.get_number_agreement(),fv.get_same_named_entity(),fv.get_wordnet_similarity(),fv.get_embedding_similarity()])
+        labels.append(int(label))
         print_feature_vectors(fv, vectors_output, label)
-    
+    return vector_collection, labels
+
+def build_classifier(train_data, train_labels, test_data, gold_labels, output_file, test_pairs):
+    clf = sklearn.svm.SVC(kernel='linear')
+
+    clf.fit(train_data, train_labels)
+    y_out = clf.predict(test_data)
+    accuracy = clf.score(test_data, gold_labels)
+
+    with open(output_file, 'a') as f:
+        for predicted_label, true_label, mp in zip(y_out, gold_labels, test_pairs):
+            antecedent_text = ' '.join([t['word'] for t in mp['antecedent']['tokens']])
+            anaphor_text = ' '.join([t['word'] for t in mp['anaphor']['tokens']])
+
+            print(f"{predicted_label}\t{true_label}\t{antecedent_text}\t{anaphor_text}", file=f)
+        print(f"Accuracy:{accuracy}", file=f)
+
 def main():
     train_pairs, embedding_file, test_pairs, vectors_output, class_output = get_inputs()
     glove_vectors = read_embedded_vectors(embedding_file)
 
     train_mps = load_mention_pairs(train_pairs)
-    parse_mps(mps = train_mps, glove_vectors=glove_vectors, vectors_output = vectors_output)
+    test_mps = load_mention_pairs(test_pairs)
+
+    train_data, train_labels = parse_mps(mps = train_mps, glove_vectors=glove_vectors, vectors_output = vectors_output)
+    test_data, test_labels = parse_mps(mps = test_mps, glove_vectors=glove_vectors, vectors_output = vectors_output)
+
+    normalized_test_data = normalize(test_data, axis=0)
+    normalized_train_data = normalize(train_data, axis=0)
+    build_classifier(train_data = normalized_train_data, train_labels=train_labels, test_data = normalized_test_data, gold_labels = test_labels, output_file=class_output, test_pairs = test_mps)
 
 if __name__ =='__main__':
     main()
