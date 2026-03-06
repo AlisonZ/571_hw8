@@ -1,10 +1,12 @@
 import sys
-from utils import load_mention_pairs
-from FeatureVectorModel import FeatureVectorModel
+import os
 import json
 import nltk
 import numpy as np
 from numpy.linalg import norm
+
+from utils import load_mention_pairs
+from FeatureVectorModel import FeatureVectorModel
 
 nltk.download('wordnet_ic')
 from nltk.corpus import wordnet as wn, wordnet_ic
@@ -19,6 +21,13 @@ def get_inputs():
     test_pairs = sys.argv[3]
     vectors_output = sys.argv[4]
     class_output = sys.argv[5]
+    
+    if os.path.exists(vectors_output):
+        os.remove(vectors_output)
+    
+    if os.path.exists(class_output):
+        os.remove(class_output)
+    
     return train_pairs, embedding_file, test_pairs, vectors_output, class_output
 
 def read_embedded_vectors(embedding_file):
@@ -169,6 +178,10 @@ def get_embedding_similarity(glove_vectors, antecedent, anaphor):
     cos = np.dot(ant_average, anaphor_average)/(norm(ant_average) * norm(anaphor_average))
     return cos
 
+def print_feature_vectors(fv, vectors_output, label):
+    with open(vectors_output, 'a') as output_file:
+        print(f'{fv.get_distance()}\t{fv.get_is_antecendent_pronoun()}\t{fv.get_is_anaphor_pronoun()}\t{fv.get_string_match()}\t{fv.get_head_string_match()}\t{fv.get_is_definite_anaphor()}\t{fv.get_is_demonstrative_anaphor()}\t{fv.get_number_agreement()}\t{fv.get_same_named_entity()}\t{fv.get_wordnet_similarity()}\t{fv.get_embedding_similarity()}\t{label}', file=output_file)
+
 def parse_mps(mps, glove_vectors, vectors_output):
 
     for mp in mps:
@@ -234,8 +247,8 @@ def parse_mps(mps, glove_vectors, vectors_output):
         # Embedding similarity 
         cos = get_embedding_similarity(glove_vectors, antecedent, anaphor)
         fv.set_embedding_similarity(cos)
-
-        print_feature_vectors(fv, vectors_output)
+        label = mp['label']
+        print_feature_vectors(fv, vectors_output, label)
     
 def main():
     train_pairs, embedding_file, test_pairs, vectors_output, class_output = get_inputs()
